@@ -16,6 +16,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _passwordCtrl = TextEditingController();
   bool _loading = false;
   String? _error;
+  bool _obscurePassword = true;
 
   Future<void> _login() async {
     setState(() {
@@ -104,10 +105,25 @@ class _LoginScreenState extends State<LoginScreen> {
                   const SizedBox(height: 16),
                   TextFormField(
                     controller: _passwordCtrl,
-                    obscureText: true,
-                    decoration: const InputDecoration(
+                    obscureText: _obscurePassword,
+                    enableInteractiveSelection: true,
+                    autocorrect: false,
+                    decoration: InputDecoration(
                       labelText: 'Password',
-                      prefixIcon: Icon(CupertinoIcons.lock),
+                      prefixIcon: const Icon(CupertinoIcons.lock),
+                      suffixIcon: IconButton(
+                        icon: Icon(
+                          _obscurePassword
+                              ? CupertinoIcons.eye_slash
+                              : CupertinoIcons.eye,
+                          color: Colors.grey,
+                        ),
+                        onPressed: () {
+                          setState(() {
+                            _obscurePassword = !_obscurePassword;
+                          });
+                        },
+                      ),
                     ),
                     validator: (v) =>
                         (v == null || v.isEmpty) ? 'Required' : null,
