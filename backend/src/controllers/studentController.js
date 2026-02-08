@@ -212,12 +212,20 @@ export async function registerFace(req, res) {
 
 export async function countStudents(req, res) {
   try {
-    const total = await Student.countDocuments();
+    const total = await Student.countDocuments({});
     const faceRegistered = await Student.countDocuments({
       faceRegistered: true,
     });
-    const facePending = await Student.countDocuments({ faceRegistered: false });
-    return res.status(200).json({ total, faceRegistered, facePending });
+    const facePending = total - faceRegistered;
+
+    return res.status(200).json({
+      total,
+      faceRegistered,
+      facePending,
+      registrationProgress:
+        total > 0 ? Math.round((faceRegistered / total) * 100) : 0,
+      timestamp: new Date().toISOString(),
+    });
   } catch (err) {
     console.error("Count students error:", err);
     return res.status(500).json({ message: "Server error" });
@@ -276,4 +284,55 @@ export function getCategories(_, res) {
 
 export function getColleges(_, res) {
   return res.status(200).json(COLLEGES);
+}
+
+/**
+ * GET /students/count
+ * Get count of registered and unregistered students (dashboard sync)
+ */
+export async function getStudentCount(req, res) {
+  try {
+    const totalCount = await Student.countDocuments({});
+    const faceRegisteredCount = await Student.countDocuments({
+      faceRegistered: true,
+    });
+    const pendingCount = totalCount - faceRegisteredCount;
+
+    return res.status(200).json({
+      total: totalCount,
+      faceRegistered: faceRegisteredCount,
+      pending: pendingCount,
+      registrationProgress:
+        totalCount > 0
+          ? Math.round((faceRegisteredCount / totalCount) * 100)
+          : 0,
+    });
+  } catch (err) {
+    console.error("Get student count error:", err);
+    return res.status(500).json({ message: "Server error" });
+  }
+}
+
+/**
+ * GET /students/pending-registration
+ * Get all students pending face registration
+ */
+export async function getPendingStudents(req, res) {
+  try {
+    const { dept, college, roomNo } = req.query;
+    const filter = { faceRegistered: false };
+
+    if (dept) filter.dept = dept;
+    if (college) filter.college = college;
+    if (roomNo) filter.roomNo = roomNo;
+
+    const students = await Student.find(filter)
+      .sort({ dept: 1, roomNo: 1, name: 1 })
+      .lean();
+
+    return res.status(200).json(students);
+  } catch (err) {
+    console.error("Get pending students error:", err);
+    return res.status(500).json({ message: "Server error" });
+  }
 }

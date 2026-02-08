@@ -271,4 +271,47 @@ class ApiService {
     final res = await _dio.get('/students/colleges');
     return List<dynamic>.from(res.data);
   }
+
+  // Generic HTTP methods for flexible API calls
+  Future<dynamic> get(
+    String endpoint, {
+    Map<String, dynamic>? queryParams,
+  }) async {
+    try {
+      final res = await _dio.get(endpoint, queryParameters: queryParams);
+      return res.data;
+    } on DioException catch (e) {
+      throw _DioExceptionWithStatus(
+        message: e.response?.data?['message'] ?? e.message ?? 'Unknown error',
+        statusCode: e.response?.statusCode ?? 500,
+        originalException: e,
+      );
+    }
+  }
+
+  Future<dynamic> post(String endpoint, {dynamic data}) async {
+    try {
+      final res = await _dio.post(endpoint, data: data);
+      return res.data;
+    } on DioException catch (e) {
+      throw _DioExceptionWithStatus(
+        message: e.response?.data?['message'] ?? e.message ?? 'Unknown error',
+        statusCode: e.response?.statusCode ?? 500,
+        originalException: e,
+      );
+    }
+  }
+
+  Future<dynamic> patch(String endpoint, {dynamic data}) async {
+    try {
+      final res = await _dio.patch(endpoint, data: data);
+      return res.data;
+    } on DioException catch (e) {
+      throw _DioExceptionWithStatus(
+        message: e.response?.data?['message'] ?? e.message ?? 'Unknown error',
+        statusCode: e.response?.statusCode ?? 500,
+        originalException: e,
+      );
+    }
+  }
 }

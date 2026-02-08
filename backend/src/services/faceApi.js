@@ -59,37 +59,67 @@ export async function checkFaceApiHealth() {
 }
 
 /**
+ * Health check with retry
+ */
+async function ensureHealthy(retries = 1) {
+  let lastErr;
+  for (let i = 0; i <= retries; i++) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      const res = await fetch(`${FACE_API_URL}/health`, {
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      if (res.ok) return true;
+    } catch (err) {
+      lastErr = err;
+      if (i < retries) await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+  if (lastErr?.name === "AbortError")
+    throw new Error("Health check timeout (408)");
+  throw new Error("Face service unavailable (503)");
+}
+
+/**
  * Register face: Convert base64 image to file and send as multipart/form-data
  * @param {string} regNo - Student registration number
  * @param {string} imageBase64 - Base64 encoded image
  * @returns {Promise<{ success: boolean, embedding?: number[] }>}
  */
 export async function registerFace(regNo, imageBase64) {
-  // Normalize input
-  const img = String(imageBase64);
+  // Validate input
+  const img = String(imageBase64).trim();
+  const normalizedRegNo = String(regNo).trim().toUpperCase();
+
+  if (!img || img.length < 100) throw new Error("Invalid image data");
+  if (!normalizedRegNo) throw new Error("Invalid registration number");
 
   if (FACE_API_TEST_MODE) {
     console.log(
       "[FACE API TEST MODE] Generating mock embedding for regNo:",
-      regNo,
+      normalizedRegNo,
     );
     await new Promise((resolve) => setTimeout(resolve, 300));
-    return { success: true, embedding: generateMockEmbedding(regNo) };
+    return { success: true, embedding: generateMockEmbedding(normalizedRegNo) };
   }
 
   if (!FACE_API_URL) throw new Error("FACE_API_URL is not set");
 
   try {
-    console.log(`[FACE API] Registering face for regNo: ${regNo}`);
+    // Health check before register
+    await ensureHealthy(1);
+
+    console.log(`[FACE API] Registering face for regNo: ${normalizedRegNo}`);
 
     const imageBuffer = Buffer.from(img, "base64");
-
     const form = new FormData();
     form.append("image", imageBuffer, {
       filename: "face.jpg",
       contentType: "image/jpeg",
     });
-    form.append("regNo", regNo);
+    form.append("regNo", normalizedRegNo);
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), FACE_API_TIMEOUT_MS);
@@ -111,12 +141,16 @@ export async function registerFace(regNo, imageBase64) {
       );
       if (response.status === 503)
         throw new Error("Face service unavailable (503)");
-      throw new Error(`Face API error: ${response.status} - ${text}`);
+      if (response.status >= 400 && response.status < 500)
+        throw new Error(
+          `Face registration failed: ${text || `HTTP ${response.status}`}`,
+        );
+      throw new Error(`Face API error: ${response.status}`);
     }
 
     const data = await response.json();
     console.log("[FACE API] Register success:", {
-      regNo,
+      regNo: normalizedRegNo,
       hasEmbedding: !!data.embedding,
     });
 

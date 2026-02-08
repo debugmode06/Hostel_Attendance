@@ -1,8 +1,6 @@
 import 'dart:convert';
-import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:camera/camera.dart';
-import 'package:intl/intl.dart';
 import '../theme/app_colors.dart';
 import '../services/api_service.dart';
 import 'package:flutter/services.dart';
@@ -23,8 +21,6 @@ class _FaceScanScreenState extends State<FaceScanScreen>
   bool _initialized = false;
   bool _scanning = false;
   ScanResult? _lastResult;
-  String? _lastStudentName;
-  DateTime? _duplicateMarkedAt;
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
 
@@ -114,8 +110,6 @@ class _FaceScanScreenState extends State<FaceScanScreen>
     setState(() {
       _scanning = true;
       _lastResult = null;
-      _lastStudentName = null;
-      _duplicateMarkedAt = null;
     });
 
     try {
@@ -138,7 +132,6 @@ class _FaceScanScreenState extends State<FaceScanScreen>
         if (mounted) {
           setState(() {
             _lastResult = ScanResult.success;
-            _lastStudentName = name;
             _scanning = false;
           });
           // Haptic success

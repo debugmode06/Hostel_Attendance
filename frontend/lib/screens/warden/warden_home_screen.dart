@@ -5,10 +5,12 @@ import '../../services/api_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/connectivity_service.dart';
 import '../../services/app_events.dart';
-import '../face_scan_screen.dart';
+import '../face_scan_screen_premium.dart';
 import '../pending_students_screen.dart';
 import '../reports/report_detail_screen.dart';
+import '../reports_screen.dart';
 import '../manage_leave_screen.dart';
+import '../bulk_student_upload_screen_complete.dart';
 
 class WardenHomeScreen extends StatefulWidget {
   const WardenHomeScreen({super.key});
@@ -85,7 +87,7 @@ class _WardenHomeScreenState extends State<WardenHomeScreen> {
     }
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => const FaceScanScreen()),
+      MaterialPageRoute(builder: (_) => const FaceScanScreenPremium()),
     ).then((_) => _load());
   }
 
@@ -330,14 +332,19 @@ class _WardenHomeScreenState extends State<WardenHomeScreen> {
                           () => Navigator.push(
                             context,
                             CupertinoPageRoute(
-                              builder: (_) => const ReportDetailScreen(),
+                              builder: (_) => const ReportsScreen(),
                             ),
                           ),
                         ),
                         _buildActionCard(
-                          'More',
-                          CupertinoIcons.ellipsis,
-                          () {},
+                          'Bulk Upload',
+                          CupertinoIcons.cloud_upload,
+                          () => Navigator.push(
+                            context,
+                            CupertinoPageRoute(
+                              builder: (_) => const BulkStudentUploadScreenComplete(),
+                            ),
+                          ).then((_) => _load()),
                         ),
                       ],
                     ),

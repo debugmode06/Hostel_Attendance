@@ -1,0 +1,25 @@
+## NAVIGATION_SETUP.dart - DEPRECATED
+
+**This file is deprecated and should not be used as-is.**
+
+It was created as a reference guide showing how to integrate the new screens into navigation. However, it contains syntax errors and incomplete code because it's meant to be a guide, not executable code.
+
+### Use Instead:
+- Refer to `NAVIGATION_SETUP_GUIDE.md` for proper navigation integration steps
+- Copy and paste code examples from that markdown file into your actual `main.dart`
+
+### What to Do:
+1. Open your `main.dart`
+2. Add the screen imports shown in `NAVIGATION_SETUP_GUIDE.md`
+3. Update your navigation/tab structure to use the new screens
+4. Test by running `flutter run`
+
+### Do NOT:
+- Try to import or use NAVIGATION_SETUP.dart directly
+- Copy the entire file as-is (it has syntax errors intentionally to show structure)
+
+The actual screen implementations are fully complete and error-free:
+- ✅ `lib/screens/face_scan_screen_premium.dart`
+- ✅ `lib/screens/face_register_screen_auto.dart`
+- ✅ `lib/screens/reports_screen.dart`
+- ✅ `lib/screens/bulk_student_upload_screen_complete.dart`

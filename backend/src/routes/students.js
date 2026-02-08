@@ -12,6 +12,7 @@ import {
   bulkCreateStudents,
   getCategories,
   getColleges,
+  getPendingStudents,
 } from "../controllers/studentController.js";
 
 const router = express.Router();
@@ -22,6 +23,7 @@ router.get("/colleges", getColleges);
 router.use(authenticate);
 
 router.get("/count", countStudents);
+router.get("/pending-registration", getPendingStudents);
 router.post("/bulk", requireWarden, bulkCreateStudents);
 
 router.get("/", listStudents);

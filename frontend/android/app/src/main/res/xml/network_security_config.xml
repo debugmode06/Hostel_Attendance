@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+    <!-- Trust production HTTPS backend -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">hostel-attendance-nc8a.onrender.com</domain>
+    </domain-config>
+</network-security-config>
