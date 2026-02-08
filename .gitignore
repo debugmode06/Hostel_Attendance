@@ -1,0 +1,37 @@
+# Backend
+backend/node_modules/
+backend/.env
+backend/.env.local
+backend/.env.*.local
+backend/dist/
+backend/build/
+
+# Frontend
+frontend/build/
+frontend/.dart_tool/
+frontend/coverage/
+frontend/.packages
+frontend/pubspec.lock
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.iml
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
