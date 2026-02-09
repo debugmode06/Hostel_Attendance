@@ -9,6 +9,7 @@ import studentRoutes from "./routes/students.js";
 import attendanceRoutes from "./routes/attendance.js";
 import reportRoutes from "./routes/reports.js";
 import faceRoutes from "./routes/face.js";
+import { warmUpFaceApi } from "./services/faceApi.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -74,4 +75,7 @@ process.on("unhandledRejection", (reason, promise) => {
   console.error("Unhandled Rejection at:", promise, "reason:", reason);
 });
 
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+  warmUpFaceApi();
+});

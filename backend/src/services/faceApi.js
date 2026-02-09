@@ -6,10 +6,13 @@
  * - POST /verify (multipart/form-data with 'image' field)
  */
 import FormData from "form-data";
+import fetch from "node-fetch";
 
 const FACE_API_URL = (
   process.env.FACE_API_URL || "https://mohans143-face-attendance-api.hf.space"
 ).replace(/\/$/, "");
+
+// Increased to 60s to handle cold starts
 const FACE_API_TIMEOUT_MS = Number(process.env.FACE_API_TIMEOUT_MS) || 60000;
 const FACE_API_TEST_MODE = process.env.FACE_API_TEST_MODE === "true";
 
@@ -37,7 +40,7 @@ function normalizeEmbedding(embedding) {
   }
 
   const normalized = embedding.map(val => val / norm);
-  console.log(`[FACE API] ✅ Embedding normalized (L2 norm: ${norm.toFixed(4)} → 1.0000)`);
+  // console.log(`[FACE API] ✅ Embedding normalized (L2 norm: ${norm.toFixed(4)} → 1.0000)`);
   return normalized;
 }
 
@@ -68,7 +71,7 @@ export async function checkFaceApiHealth() {
 
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), FACE_API_TIMEOUT_MS);
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout for health
 
     const response = await fetch(`${FACE_API_URL}/health`, {
       method: "GET",
@@ -84,14 +87,28 @@ export async function checkFaceApiHealth() {
 }
 
 /**
+ * Warm up the Face API on server start to reduce cold start latency
+ */
+export async function warmUpFaceApi() {
+  if (FACE_API_TEST_MODE) return;
+  console.log("[FACE API] 🔥 Warming up Hugging Face Space...");
+
+  // Fire and forget - don't block server start
+  checkFaceApiHealth().then((healthy) => {
+    if (healthy) console.log("[FACE API] ✅ Service is warm and ready");
+    else console.log("[FACE API] ⚠️ Service might be cold or down (will retry on request)");
+  }).catch(() => { });
+}
+
+/**
  * Health check with retry
  */
-async function ensureHealthy(retries = 1) {
+async function ensureHealthy(retries = 2) {
   let lastErr;
   for (let i = 0; i <= retries; i++) {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
       const res = await fetch(`${FACE_API_URL}/health`, {
         signal: controller.signal,
       });
@@ -99,7 +116,10 @@ async function ensureHealthy(retries = 1) {
       if (res.ok) return true;
     } catch (err) {
       lastErr = err;
-      if (i < retries) await new Promise((r) => setTimeout(r, 1000));
+      if (i < retries) {
+        console.log(`[FACE API] Health check retry ${i + 1}/${retries}...`);
+        await new Promise((r) => setTimeout(r, 1500));
+      }
     }
   }
   if (lastErr?.name === "AbortError")
@@ -134,7 +154,7 @@ export async function registerFace(regNo, imageBase64) {
 
   try {
     // Health check before register
-    await ensureHealthy(1);
+    // await ensureHealthy(1); // Skip explicit health check to save time, rely on main call
 
     console.log(`[FACE API] Registering face for regNo: ${normalizedRegNo}`);
 
@@ -216,14 +236,14 @@ export async function matchFace(imageBase64, storedEmbeddings = []) {
     for (const s of storedEmbeddings) {
       const storedEmb = normalizeEmbedding(s.embedding || []);
       const sim = cosineSimilarity(imageHashEmbedding, storedEmb);
-      console.log(`[FACE API TEST MODE]   ${s.regNo}: similarity = ${sim.toFixed(4)}`);
+      // console.log(`[FACE API TEST MODE]   ${s.regNo}: similarity = ${sim.toFixed(4)}`);
 
       if (sim > best.confidence) {
         best = { regNo: s.regNo, confidence: sim };
       }
     }
 
-    console.log(`[FACE API TEST MODE] Best match: ${best.regNo} with confidence ${best.confidence.toFixed(4)}`);
+    // console.log(`[FACE API TEST MODE] Best match: ${best.regNo} with confidence ${best.confidence.toFixed(4)}`);
     return { regNo: best.regNo, confidence: best.confidence };
   }
 
@@ -233,51 +253,74 @@ export async function matchFace(imageBase64, storedEmbeddings = []) {
     console.log("[FACE API] Extracting embedding from incoming image...");
 
     // Step 1: Get embedding from the incoming image using /register endpoint
+    // We use /register because it returns the embedding. /verify on HF side might do comparison, but we do local comparison here.
+    // The user's request implies "Facenet model" which usually returns 128/512d vector.
+
     const imageBuffer = Buffer.from(img, "base64");
-    const form = new FormData();
-    form.append("image", imageBuffer, {
-      filename: "face.jpg",
-      contentType: "image/jpeg",
-    });
-    form.append("regNo", "TEMP_VERIFY"); // Dummy regNo for embedding extraction
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), FACE_API_TIMEOUT_MS);
+    let data;
+    let attempts = 0;
+    // Retry logic
+    while (attempts < 2) {
+      attempts++;
+      try {
+        const form = new FormData();
+        form.append("image", imageBuffer, {
+          filename: "face.jpg",
+          contentType: "image/jpeg",
+        });
+        form.append("regNo", "TEMP_VERIFY");
 
-    const response = await fetch(`${FACE_API_URL}/register`, {
-      method: "POST",
-      body: form,
-      headers: form.getHeaders(),
-      signal: controller.signal,
-    });
+        const controller = new AbortController();
+        // First attempt 25s, second 45s
+        const currentTimeout = attempts === 1 ? 25000 : 45000;
+        const timeoutId = setTimeout(() => controller.abort(), currentTimeout);
 
-    clearTimeout(timeoutId);
+        console.log(`[FACE API] Requesting embedding (Attempt ${attempts})...`);
+        const response = await fetch(`${FACE_API_URL}/register`, {
+          method: "POST",
+          body: form,
+          headers: form.getHeaders(),
+          signal: controller.signal,
+        });
 
-    if (!response.ok) {
-      const text = await response.text();
-      console.error("[FACE API] Embedding extraction failed:", response.status, text);
-      if (response.status === 503)
-        throw new Error("Face service unavailable (503)");
-      throw new Error(`Face API error: ${response.status}`);
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          if (response.status >= 500 && attempts < 2) {
+            console.log(`[FACE API] Server error ${response.status}, retrying...`);
+            await new Promise(r => setTimeout(r, 1500));
+            continue;
+          }
+          const text = await response.text();
+          throw new Error(`Face API error: ${response.status} ${text}`);
+        }
+
+        data = await response.json();
+        break; // success
+      } catch (e) {
+        console.warn(`[FACE API] Attempt ${attempts} error: ${e.message}`);
+        if (attempts >= 2) throw e;
+        await new Promise(r => setTimeout(r, 1000));
+      }
     }
 
-    const data = await response.json();
-    if (!data.embedding || data.embedding.length === 0) {
+    if (!data || !data.embedding || data.embedding.length === 0) {
       console.error("[FACE API] No face detected in incoming image");
       return { regNo: null, confidence: 0 };
     }
 
     // Step 2: Normalize the incoming embedding
     const incomingEmbedding = normalizeEmbedding(data.embedding);
-    console.log(`[FACE API] Incoming embedding extracted (${incomingEmbedding.length} dimensions)`);
+    // console.log(`[FACE API] Incoming embedding extracted (${incomingEmbedding.length} dimensions)`);
 
     // Step 3: Compare against all stored embeddings locally
     let bestMatch = { regNo: null, confidence: 0 };
-    console.log(`\n[FACE API] 🔍 Comparing against ${storedEmbeddings.length} stored faces...\n`);
+    // console.log(`\n[FACE API] 🔍 Comparing against ${storedEmbeddings.length} stored faces...\n`);
 
     for (const stored of storedEmbeddings) {
       if (!stored.embedding || stored.embedding.length === 0) {
-        console.log(`[FACE API]   ${stored.regNo}: ⚠️  No embedding stored`);
+        // console.log(`[FACE API]   ${stored.regNo}: ⚠️  No embedding stored`);
         continue;
       }
 
@@ -285,7 +328,7 @@ export async function matchFace(imageBase64, storedEmbeddings = []) {
       const normalizedStored = normalizeEmbedding(stored.embedding);
       const similarity = cosineSimilarity(incomingEmbedding, normalizedStored);
 
-      console.log(`[FACE API]   ${stored.regNo}: SIMILARITY = ${similarity.toFixed(4)}`);
+      // console.log(`[FACE API]   ${stored.regNo}: SIMILARITY = ${similarity.toFixed(4)}`);
 
       if (similarity > bestMatch.confidence) {
         bestMatch = { regNo: stored.regNo, confidence: similarity };
@@ -294,12 +337,12 @@ export async function matchFace(imageBase64, storedEmbeddings = []) {
 
     // 🔥 CRITICAL: Use threshold of 0.55 for mobile face recognition
     const MATCH_THRESHOLD = 0.55;
-    console.log(`\n[FACE API] ============================================`);
-    console.log(`[FACE API] 🎯 Best Match: ${bestMatch.regNo || "NONE"}`);
-    console.log(`[FACE API] 📊 Confidence: ${bestMatch.confidence.toFixed(4)}`);
-    console.log(`[FACE API] 🎚️  Threshold:  ${MATCH_THRESHOLD}`);
-    console.log(`[FACE API] ✅ Match: ${bestMatch.confidence >= MATCH_THRESHOLD ? "YES" : "NO"}`);
-    console.log(`[FACE API] ============================================\n`);
+    // console.log(`\n[FACE API] ============================================`);
+    console.log(`[FACE API] 🎯 Best Match: ${bestMatch.regNo || "NONE"} (${bestMatch.confidence.toFixed(4)})`);
+    // console.log(`[FACE API] 📊 Confidence: ${bestMatch.confidence.toFixed(4)}`);
+    // console.log(`[FACE API] 🎚️  Threshold:  ${MATCH_THRESHOLD}`);
+    // console.log(`[FACE API] ✅ Match: ${bestMatch.confidence >= MATCH_THRESHOLD ? "YES" : "NO"}`);
+    // console.log(`[FACE API] ============================================\n`);
 
     if (bestMatch.confidence < MATCH_THRESHOLD) {
       return { regNo: null, confidence: bestMatch.confidence };
@@ -326,15 +369,11 @@ export function cosineSimilarity(a = [], b = []) {
     b.length === 0
   )
     return 0;
-  const len = Math.min(a.length, b.length);
-  let dot = 0,
-    na = 0,
-    nb = 0;
-  for (let i = 0; i < len; i++) {
+
+  // Since we normalize beforehand, simple dot product
+  let dot = 0;
+  for (let i = 0; i < a.length; i++) {
     dot += a[i] * b[i];
-    na += a[i] * a[i];
-    nb += b[i] * b[i];
   }
-  if (na === 0 || nb === 0) return 0;
-  return dot / (Math.sqrt(na) * Math.sqrt(nb));
+  return dot;
 }

@@ -19,6 +19,7 @@
     "jimp": "^0.16.13",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.7.0",
+    "node-fetch": "^3.3.2",
     "pdfkit": "^0.15.0"
   }
 }
