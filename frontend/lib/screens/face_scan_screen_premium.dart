@@ -204,7 +204,7 @@ class _FaceScanScreenPremiumState extends State<FaceScanScreenPremium>
            _scanStatus = ScanStatus.error;
            _statusMessage = userMsg;
         });
-        HapticFeedback.notification(FeedbackType.error);
+        await HapticFeedback.heavyImpact();
         
         // Reset after delay
         Future.delayed(const Duration(seconds: 4), () {
