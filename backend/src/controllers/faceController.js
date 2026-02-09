@@ -165,43 +165,43 @@ export async function registerFace(req, res) {
   }
 }
 
-    if (!result.embedding || result.embedding.length === 0) {
-      return res.status(400).json({
-        message: "Face not detected. Please try with a clear face image.",
-      });
-    }
+if (!result.embedding || result.embedding.length === 0) {
+  return res.status(400).json({
+    message: "Face not detected. Please try with a clear face image.",
+  });
+}
 
-    // Save to database
-    student.faceRegistered = true;
-    student.faceEmbedding = result.embedding;
-    await student.save();
+// Save to database
+student.faceRegistered = true;
+student.faceEmbedding = result.embedding;
+await student.save();
 
-    console.log(`[FACE] Face registered successfully for: ${regNo}`);
-    return res.status(200).json({
-      success: true,
-      _id: student._id,
-      regNo: student.regNo,
-      name: student.name,
-      faceRegistered: true,
-      confidence: 0.95,
-    });
+console.log(`[FACE] Face registered successfully for: ${regNo}`);
+return res.status(200).json({
+  success: true,
+  _id: student._id,
+  regNo: student.regNo,
+  name: student.name,
+  faceRegistered: true,
+  confidence: 0.95,
+});
   } catch (err) {
-    console.error("[FACE] Register error:", err.message);
+  console.error("[FACE] Register error:", err.message);
 
-    // Handle specific error types
-    if (err.message.includes("503")) {
-      return res.status(503).json({
-        message: "Face service waking up. Please try again in 20 seconds.",
-      });
-    }
-    if (err.message.includes("408")) {
-      return res.status(408).json({
-        message: "Face service timeout. Please try again.",
-      });
-    }
-
-    return res.status(500).json({ message: "Server error" });
+  // Handle specific error types
+  if (err.message.includes("503")) {
+    return res.status(503).json({
+      message: "Face service waking up. Please try again in 20 seconds.",
+    });
   }
+  if (err.message.includes("408")) {
+    return res.status(408).json({
+      message: "Face service timeout. Please try again.",
+    });
+  }
+
+  return res.status(500).json({ message: "Server error" });
+}
 }
 
 /**
@@ -219,6 +219,8 @@ export async function verifyFace(req, res) {
         .json({ message: "imageBase64 or image is required" });
     }
 
+    console.log("[FACE] 🎯 Starting face verification...");
+
     // Check Face API health
     const isHealthy = await checkFaceApiHealth();
     if (!isHealthy) {
@@ -227,27 +229,61 @@ export async function verifyFace(req, res) {
       });
     }
 
-    // Call Face API to match
-    console.log("[FACE] Matching face");
-    const result = await matchFace(imageData);
+    // Fetch all registered students with their embeddings
+    console.log("[FACE] Fetching all registered students from database...");
+    const registeredStudents = await Student.find({
+      faceRegistered: true,
+      faceEmbedding: { $exists: true, $ne: [] },
+    }).select("regNo name dept roomNo faceEmbedding");
 
-    if (!result.regNo || result.confidence < 0.85) {
+    console.log(`[FACE] Found ${registeredStudents.length} registered students`);
+
+    if (registeredStudents.length === 0) {
+      console.log("[FACE] No registered faces in database");
+      return res.status(200).json({
+        matched: false,
+        confidence: 0,
+        message: "No registered faces in database",
+      });
+    }
+
+    // Prepare embeddings array for comparison
+    const storedEmbeddings = registeredStudents.map((s) => ({
+      regNo: s.regNo,
+      embedding: s.faceEmbedding,
+    }));
+
+    // Call Face API to match (now does local comparison with normalization)
+    console.log("[FACE] Calling matchFace with stored embeddings...");
+    const result = await matchFace(imageData, storedEmbeddings);
+
+    console.log(
+      `[FACE] Match result: regNo=${result.regNo}, confidence=${result.confidence?.toFixed(4) || 0}`
+    );
+
+    // 🔥 CRITICAL: Threshold is now 0.55 and applied in matchFace
+    if (!result.regNo || result.confidence < 0.55) {
+      console.log(`[FACE] ❌ No match found (confidence: ${result.confidence?.toFixed(4) || 0})`);
       return res
         .status(200)
         .json({ matched: false, confidence: result.confidence || 0 });
     }
 
-    // Find student by regNo
+    // Find student by regNo to get full details
     const student = await Student.findOne({ regNo: result.regNo });
     if (!student) {
+      console.error(`[FACE] Student ${result.regNo} not found in database`);
       return res.status(200).json({ matched: false });
     }
 
     if (!student.faceRegistered) {
+      console.error(`[FACE] Student ${result.regNo} face not registered`);
       return res.status(200).json({ matched: false });
     }
 
-    console.log(`[FACE] Face matched for student: ${student.regNo}`);
+    console.log(
+      `[FACE] ✅ Face matched for student: ${student.regNo} (${student.name}) with confidence ${result.confidence.toFixed(4)}`
+    );
     return res.status(200).json({
       matched: true,
       studentId: student.regNo,

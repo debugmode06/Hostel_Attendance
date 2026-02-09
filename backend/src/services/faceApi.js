@@ -18,6 +18,30 @@ console.log(
 );
 
 /**
+ * L2 Normalization - CRITICAL for face recognition consistency
+ * Normalizes embedding vector to unit length
+ */
+function normalizeEmbedding(embedding) {
+  if (!Array.isArray(embedding) || embedding.length === 0) {
+    console.error("[FACE API] Cannot normalize empty embedding");
+    return embedding;
+  }
+
+  const norm = Math.sqrt(
+    embedding.reduce((sum, val) => sum + val * val, 0)
+  );
+
+  if (norm === 0) {
+    console.error("[FACE API] Cannot normalize zero-norm embedding");
+    return embedding;
+  }
+
+  const normalized = embedding.map(val => val / norm);
+  console.log(`[FACE API] ✅ Embedding normalized (L2 norm: ${norm.toFixed(4)} → 1.0000)`);
+  return normalized;
+}
+
+/**
  * Generate a deterministic mock embedding from regNo (for testing)
  */
 function generateMockEmbedding(regNo) {
@@ -31,7 +55,8 @@ function generateMockEmbedding(regNo) {
     seed = (seed * 9301 + 49297) % 233280;
     embedding.push((seed / 233280) * 2 - 1);
   }
-  return embedding;
+  // Normalize mock embedding too
+  return normalizeEmbedding(embedding);
 }
 
 /**
@@ -154,9 +179,13 @@ export async function registerFace(regNo, imageBase64) {
       hasEmbedding: !!data.embedding,
     });
 
+    // 🔥 CRITICAL: Normalize embedding using L2 normalization
+    const rawEmbedding = data.embedding || data.data?.embedding || [];
+    const normalizedEmbedding = normalizeEmbedding(rawEmbedding);
+
     return {
       success: true,
-      embedding: data.embedding || data.data?.embedding || [],
+      embedding: normalizedEmbedding,
     };
   } catch (err) {
     if (err.name === "AbortError")
@@ -167,12 +196,13 @@ export async function registerFace(regNo, imageBase64) {
 }
 
 /**
- * Verify/match face: send image to HF /verify endpoint
+ * Verify/match face: send image to HF /register endpoint to get embedding,
+ * then compare locally against all stored embeddings
  * @param {string} imageBase64 - Base64 encoded image
+ * @param {Array} storedEmbeddings - array of { regNo, embedding } from database
  * @returns {Promise<{ regNo: string|null, confidence: number }>}
  */
 export async function matchFace(imageBase64, storedEmbeddings = []) {
-  // storedEmbeddings: array of { regNo, embedding }
   const img = String(imageBase64);
 
   if (FACE_API_TEST_MODE) {
@@ -181,45 +211,40 @@ export async function matchFace(imageBase64, storedEmbeddings = []) {
     const imageHashEmbedding = generateMockEmbedding(String(img).slice(0, 20));
 
     let best = { regNo: null, confidence: 0 };
+    console.log(`[FACE API TEST MODE] Comparing against ${storedEmbeddings.length} stored embeddings...`);
+
     for (const s of storedEmbeddings) {
-      const sim = cosineSimilarity(imageHashEmbedding, s.embedding || []);
+      const storedEmb = normalizeEmbedding(s.embedding || []);
+      const sim = cosineSimilarity(imageHashEmbedding, storedEmb);
+      console.log(`[FACE API TEST MODE]   ${s.regNo}: similarity = ${sim.toFixed(4)}`);
+
       if (sim > best.confidence) {
         best = { regNo: s.regNo, confidence: sim };
       }
     }
-    console.log(
-      "[FACE API TEST MODE] Compared",
-      storedEmbeddings.length,
-      "embeddings. Best:",
-      best,
-    );
+
+    console.log(`[FACE API TEST MODE] Best match: ${best.regNo} with confidence ${best.confidence.toFixed(4)}`);
     return { regNo: best.regNo, confidence: best.confidence };
   }
 
   if (!FACE_API_URL) throw new Error("FACE_API_URL is not set");
 
   try {
-    console.log("[FACE API] Matching face");
+    console.log("[FACE API] Extracting embedding from incoming image...");
+
+    // Step 1: Get embedding from the incoming image using /register endpoint
     const imageBuffer = Buffer.from(img, "base64");
     const form = new FormData();
     form.append("image", imageBuffer, {
       filename: "face.jpg",
       contentType: "image/jpeg",
     });
-
-    // If storedEmbeddings provided, send as JSON string field
-    if (Array.isArray(storedEmbeddings) && storedEmbeddings.length > 0) {
-      const onlyEmb = storedEmbeddings.map((s) => ({
-        regNo: s.regNo,
-        embedding: s.embedding,
-      }));
-      form.append("embeddings", JSON.stringify(onlyEmb));
-    }
+    form.append("regNo", "TEMP_VERIFY"); // Dummy regNo for embedding extraction
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), FACE_API_TIMEOUT_MS);
 
-    const response = await fetch(`${FACE_API_URL}/verify`, {
+    const response = await fetch(`${FACE_API_URL}/register`, {
       method: "POST",
       body: form,
       headers: form.getHeaders(),
@@ -230,21 +255,60 @@ export async function matchFace(imageBase64, storedEmbeddings = []) {
 
     if (!response.ok) {
       const text = await response.text();
-      console.error(
-        "[FACE API] Match failed with status",
-        response.status,
-        text,
-      );
+      console.error("[FACE API] Embedding extraction failed:", response.status, text);
       if (response.status === 503)
         throw new Error("Face service unavailable (503)");
       throw new Error(`Face API error: ${response.status}`);
     }
 
     const data = await response.json();
-    const regNo = data.regNo || data.studentId || data.data?.regNo || null;
-    const confidence = Number(data.confidence || data.data?.confidence || 0);
-    console.log("[FACE API] Match result:", { regNo, confidence });
-    return { regNo: regNo ? String(regNo) : null, confidence };
+    if (!data.embedding || data.embedding.length === 0) {
+      console.error("[FACE API] No face detected in incoming image");
+      return { regNo: null, confidence: 0 };
+    }
+
+    // Step 2: Normalize the incoming embedding
+    const incomingEmbedding = normalizeEmbedding(data.embedding);
+    console.log(`[FACE API] Incoming embedding extracted (${incomingEmbedding.length} dimensions)`);
+
+    // Step 3: Compare against all stored embeddings locally
+    let bestMatch = { regNo: null, confidence: 0 };
+    console.log(`\n[FACE API] 🔍 Comparing against ${storedEmbeddings.length} stored faces...\n`);
+
+    for (const stored of storedEmbeddings) {
+      if (!stored.embedding || stored.embedding.length === 0) {
+        console.log(`[FACE API]   ${stored.regNo}: ⚠️  No embedding stored`);
+        continue;
+      }
+
+      // Normalize stored embedding before comparison
+      const normalizedStored = normalizeEmbedding(stored.embedding);
+      const similarity = cosineSimilarity(incomingEmbedding, normalizedStored);
+
+      console.log(`[FACE API]   ${stored.regNo}: SIMILARITY = ${similarity.toFixed(4)}`);
+
+      if (similarity > bestMatch.confidence) {
+        bestMatch = { regNo: stored.regNo, confidence: similarity };
+      }
+    }
+
+    // 🔥 CRITICAL: Use threshold of 0.55 for mobile face recognition
+    const MATCH_THRESHOLD = 0.55;
+    console.log(`\n[FACE API] ============================================`);
+    console.log(`[FACE API] 🎯 Best Match: ${bestMatch.regNo || "NONE"}`);
+    console.log(`[FACE API] 📊 Confidence: ${bestMatch.confidence.toFixed(4)}`);
+    console.log(`[FACE API] 🎚️  Threshold:  ${MATCH_THRESHOLD}`);
+    console.log(`[FACE API] ✅ Match: ${bestMatch.confidence >= MATCH_THRESHOLD ? "YES" : "NO"}`);
+    console.log(`[FACE API] ============================================\n`);
+
+    if (bestMatch.confidence < MATCH_THRESHOLD) {
+      return { regNo: null, confidence: bestMatch.confidence };
+    }
+
+    return {
+      regNo: bestMatch.regNo,
+      confidence: bestMatch.confidence,
+    };
   } catch (err) {
     if (err.name === "AbortError")
       throw new Error("Face verification timeout (408)");
