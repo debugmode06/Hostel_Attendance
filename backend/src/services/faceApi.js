@@ -335,8 +335,8 @@ export async function matchFace(imageBase64, storedEmbeddings = []) {
       }
     }
 
-    // 🔥 CRITICAL: Use threshold of 0.55 for mobile face recognition
-    const MATCH_THRESHOLD = 0.55;
+    // 🔥 CRITICAL: Use threshold of 0.50 for mobile face recognition
+    const MATCH_THRESHOLD = 0.50;
     // console.log(`\n[FACE API] ============================================`);
     console.log(`[FACE API] 🎯 Best Match: ${bestMatch.regNo || "NONE"} (${bestMatch.confidence.toFixed(4)})`);
     // console.log(`[FACE API] 📊 Confidence: ${bestMatch.confidence.toFixed(4)}`);

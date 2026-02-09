@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/cupertino.dart';
 import 'package:camera/camera.dart';
@@ -6,6 +7,8 @@ import 'package:intl/intl.dart';
 import '../theme/app_colors.dart';
 import '../services/api_service.dart';
 import 'package:flutter/services.dart';
+
+enum ScanStatus { idle, scanning, success, noMatch, error, warmingUp }
 
 class FaceScanScreenPremium extends StatefulWidget {
   const FaceScanScreenPremium({super.key});
@@ -19,7 +22,12 @@ class _FaceScanScreenPremiumState extends State<FaceScanScreenPremium>
   CameraController? _controller;
   List<CameraDescription>? _cameras;
   bool _cameraReady = false;
-  bool _scanning = false;
+  ScanStatus _scanStatus = ScanStatus.idle;
+  
+  // Retry logic
+  int _retryCount = 0;
+  String? _statusMessage;
+  
   late AnimationController _fadeController;
   late AnimationController _loaderController;
   late Animation<double> _fadeAnimation;
@@ -78,16 +86,23 @@ class _FaceScanScreenPremiumState extends State<FaceScanScreenPremium>
     }
   }
 
-  Future<void> _captureAndScan() async {
-    if (_scanning || !_cameraReady || _controller == null) return;
+  Future<void> _captureAndScan({bool isRetry = false}) async {
+    if (_scanStatus == ScanStatus.scanning && !isRetry) return;
+    if (!_cameraReady || _controller == null) return;
 
-    setState(() => _scanning = true);
+    if (!isRetry) _retryCount = 0;
+
+    setState(() {
+      _scanStatus = ScanStatus.scanning;
+      _statusMessage = isRetry ? "Retrying..." : null;
+    });
 
     try {
       final image = await _controller!.takePicture();
       final bytes = await image.readAsBytes();
       final base64Image = base64Encode(bytes);
 
+      // Use specific timeout for Dio if possible, or rely on global
       final response = await ApiService().post(
         '/attendance/scan',
         data: {
@@ -98,8 +113,10 @@ class _FaceScanScreenPremiumState extends State<FaceScanScreenPremium>
       if (!mounted) return;
 
       if (response['matched'] == true) {
-        // Success: auto-close camera
+        // Success
         await HapticFeedback.mediumImpact();
+        setState(() => _scanStatus = ScanStatus.success);
+        
         await _showSuccessDialog(
           response['student']?['name'] ?? 'Face Matched',
           response['student']?['roomNo'] ?? '',
@@ -107,13 +124,98 @@ class _FaceScanScreenPremiumState extends State<FaceScanScreenPremium>
         if (mounted) Navigator.pop(context, true);
       } else {
         // No match
-        await HapticFeedback.lightImpact();
-        _showNoMatchDialog(response['confidence'] ?? 0);
+        final confidence = (response['confidence'] as num?)?.toDouble() ?? 0.0;
+        final message = response['message'] as String? ?? '';
+        
+        // Check for "waking up" message in 200 OK response
+        if (message.toLowerCase().contains('waking up')) {
+           throw Exception('Face service waking up (503)');
+        }
+        
+        _handleNoMatch(confidence, message);
       }
     } catch (e) {
-      _showError('Scan Error', e.toString());
+      _handleError(e);
     } finally {
-      if (mounted) setState(() => _scanning = false);
+      if (mounted && _scanStatus != ScanStatus.success && _scanStatus != ScanStatus.warmingUp) {
+        // Return to idle if not success/warming up
+        // setState(() => _scanStatus = ScanStatus.idle);
+        // We might want to keep the error state visible for a moment
+      }
+    }
+  }
+
+  void _handleNoMatch(double confidence, String serverMessage) {
+    if (!mounted) return;
+    HapticFeedback.lightImpact();
+
+    final isAlmostMatch = confidence >= 0.45;
+    
+    // Auto-retry if it's a "blur" issue? No, user needs to stabilize.
+    
+    setState(() {
+      _scanStatus = ScanStatus.noMatch;
+      _statusMessage = isAlmostMatch 
+         ? "Almost matched (${confidence.toStringAsFixed(2)}). Move closer."
+         : (serverMessage.isNotEmpty && serverMessage != "Image too blurred or low contrast" ? serverMessage : "Face not recognized");
+    });
+
+    // Reset status after a delay so user can try again
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted && _scanStatus == ScanStatus.noMatch) {
+         setState(() {
+           _scanStatus = ScanStatus.idle;
+           _statusMessage = null;
+         });
+      }
+    });
+  }
+
+  void _handleError(Object error) async {
+    final eStr = error.toString();
+    debugPrint('[SCAN ERROR] $eStr');
+
+    bool shouldRetry = false;
+    String userMsg = 'Scan failed';
+
+    if (eStr.contains('503') || eStr.contains('waking up')) {
+      userMsg = 'Server warming up...';
+      shouldRetry = true;
+    } else if (eStr.contains('408') || eStr.contains('timeout')) {
+      userMsg = 'Connection timed out';
+      shouldRetry = true;
+    } else if (eStr.contains('409')) {
+      userMsg = 'Already marked for today';
+    }
+
+    if (shouldRetry && _retryCount < 1) {
+      if (mounted) {
+        setState(() {
+          _scanStatus = ScanStatus.warmingUp;
+          _statusMessage = "$userMsg (Retrying in 5s)";
+        });
+      }
+      _retryCount++;
+      await Future.delayed(const Duration(seconds: 5));
+      if (mounted) _captureAndScan(isRetry: true);
+    } else {
+      if (mounted) {
+        setState(() {
+           _scanStatus = ScanStatus.error;
+           _statusMessage = userMsg;
+        });
+        HapticFeedback.notification(FeedbackType.error);
+        
+        // Reset after delay
+        Future.delayed(const Duration(seconds: 4), () {
+          if (mounted && _scanStatus == ScanStatus.error) {
+            setState(() {
+              _scanStatus = ScanStatus.idle;
+              _statusMessage = null;
+            });
+          }
+        });
+      }
     }
   }
 
@@ -159,28 +261,6 @@ class _FaceScanScreenPremiumState extends State<FaceScanScreenPremium>
           CupertinoDialogAction(
             isDefaultAction: true,
             child: const Text('Done'),
-            onPressed: () => Navigator.pop(ctx),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showNoMatchDialog(double confidence) {
-    final isAlmostMatch = confidence >= 0.45 && confidence < 0.55;
-
-    showCupertinoDialog(
-      context: context,
-      builder: (ctx) => CupertinoAlertDialog(
-        title: Text(isAlmostMatch ? 'Almost Matched' : 'Face Not Recognised'),
-        content: Text(
-          isAlmostMatch
-              ? 'Please adjust lighting and try again.'
-              : 'Clear lighting and steady face needed.',
-        ),
-        actions: [
-          CupertinoDialogAction(
-            child: const Text('Retry'),
             onPressed: () => Navigator.pop(ctx),
           ),
         ],
@@ -255,7 +335,6 @@ class _FaceScanScreenPremiumState extends State<FaceScanScreenPremium>
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              // Animated loader - scale animation
               ScaleTransition(
                 scale: Tween<double>(begin: 0.7, end: 1.0).animate(
                   CurvedAnimation(
@@ -283,7 +362,6 @@ class _FaceScanScreenPremiumState extends State<FaceScanScreenPremium>
                 ),
               ),
               const SizedBox(height: 32),
-              // Animated text fade
               FadeTransition(
                 opacity: Tween<double>(begin: 0.5, end: 0.8).animate(
                   CurvedAnimation(
@@ -311,10 +389,15 @@ class _FaceScanScreenPremiumState extends State<FaceScanScreenPremium>
   }
 
   Widget _buildCameraLiveUi() {
+    Color frameColor = CupertinoColors.white.withOpacity(0.6);
+    if (_scanStatus == ScanStatus.success) frameColor = AppColors.success;
+    if (_scanStatus == ScanStatus.error || _scanStatus == ScanStatus.noMatch) frameColor = AppColors.error;
+    if (_scanStatus == ScanStatus.warmingUp) frameColor = AppColors.warning;
+
     return Stack(
       fit: StackFit.expand,
       children: [
-        // Camera preview with blur background
+        // Camera preview
         FadeTransition(
           opacity: _fadeAnimation,
           child: ClipRect(
@@ -331,109 +414,70 @@ class _FaceScanScreenPremiumState extends State<FaceScanScreenPremium>
             ),
           ),
         ),
-        // Dark overlay for guide
+        // Dark overlay
         Container(color: CupertinoColors.black.withOpacity(0.2)),
-        // Face guide frame - animated appearance
+        
+        // Face guide frame
         Center(
           child: ScaleTransition(
             scale: _frameAnimation,
             child: FadeTransition(
               opacity: _fadeAnimation,
-              child: Container(
-                width: 220,
-                height: 280,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 300),
+                width: 250,
+                height: 320,
                 decoration: BoxDecoration(
                   border: Border.all(
-                    color: CupertinoColors.white.withOpacity(0.6),
-                    width: 2,
+                    color: frameColor,
+                    width: _scanStatus == ScanStatus.idle ? 2 : 4,
                   ),
                   borderRadius: BorderRadius.circular(32),
+                  boxShadow: [
+                    BoxShadow(
+                      color: frameColor.withOpacity(0.3),
+                      blurRadius: 20, 
+                      spreadRadius: 2
+                    )
+                  ]
                 ),
                 child: Stack(
                   alignment: Alignment.center,
                   children: [
-                    // Corner guides
-                    Positioned(
-                      top: 12,
-                      left: 12,
-                      child: Container(
-                        width: 24,
-                        height: 24,
+                    // Corner guides (only show if idle or scanning)
+                    if (_scanStatus == ScanStatus.idle || _scanStatus == ScanStatus.scanning) ...[
+                      _buildCorner(top: 12, left: 12),
+                      _buildCorner(top: 12, right: 12),
+                      _buildCorner(bottom: 12, left: 12),
+                      _buildCorner(bottom: 12, right: 12),
+                    ],
+                    
+                    // Status text inside frame
+                    if (_statusMessage != null)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                         decoration: BoxDecoration(
-                          border: Border(
-                            top: BorderSide(color: AppColors.primary, width: 3),
-                            left: BorderSide(
-                              color: AppColors.primary,
-                              width: 3,
-                            ),
+                          color: CupertinoColors.black.withOpacity(0.6),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(
+                          _statusMessage!,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: CupertinoColors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
                       ),
-                    ),
-                    Positioned(
-                      top: 12,
-                      right: 12,
-                      child: Container(
-                        width: 24,
-                        height: 24,
-                        decoration: BoxDecoration(
-                          border: Border(
-                            top: BorderSide(color: AppColors.primary, width: 3),
-                            right: BorderSide(
-                              color: AppColors.primary,
-                              width: 3,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      bottom: 12,
-                      left: 12,
-                      child: Container(
-                        width: 24,
-                        height: 24,
-                        decoration: BoxDecoration(
-                          border: Border(
-                            bottom: BorderSide(
-                              color: AppColors.primary,
-                              width: 3,
-                            ),
-                            left: BorderSide(
-                              color: AppColors.primary,
-                              width: 3,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      bottom: 12,
-                      right: 12,
-                      child: Container(
-                        width: 24,
-                        height: 24,
-                        decoration: BoxDecoration(
-                          border: Border(
-                            bottom: BorderSide(
-                              color: AppColors.primary,
-                              width: 3,
-                            ),
-                            right: BorderSide(
-                              color: AppColors.primary,
-                              width: 3,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
                   ],
                 ),
               ),
             ),
           ),
         ),
-        // Action button
+        
+        // Scan Button
         Positioned(
           bottom: 48,
           left: 0,
@@ -441,13 +485,18 @@ class _FaceScanScreenPremiumState extends State<FaceScanScreenPremium>
           child: Center(
             child: CupertinoButton(
               padding: EdgeInsets.zero,
-              onPressed: _scanning ? null : _captureAndScan,
-              child: Container(
+              onPressed: (_scanStatus == ScanStatus.scanning || _scanStatus == ScanStatus.warmingUp) 
+                  ? null 
+                  : () => _captureAndScan(),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
                 width: 72,
                 height: 72,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: AppColors.primary.withOpacity(0.9),
+                  color: (_scanStatus == ScanStatus.scanning || _scanStatus == ScanStatus.warmingUp)
+                      ? CupertinoColors.systemGrey
+                      : AppColors.primary.withOpacity(0.9),
                   boxShadow: [
                     BoxShadow(
                       color: AppColors.primary.withOpacity(0.4),
@@ -456,7 +505,7 @@ class _FaceScanScreenPremiumState extends State<FaceScanScreenPremium>
                     ),
                   ],
                 ),
-                child: _scanning
+                child: (_scanStatus == ScanStatus.scanning || _scanStatus == ScanStatus.warmingUp)
                     ? const Padding(
                         padding: EdgeInsets.all(16),
                         child: CupertinoActivityIndicator(
@@ -464,16 +513,37 @@ class _FaceScanScreenPremiumState extends State<FaceScanScreenPremium>
                           radius: 14,
                         ),
                       )
-                    : Icon(
+                    : const Icon(
                         CupertinoIcons.camera_fill,
                         color: CupertinoColors.white,
-                        size: _scanning ? 28 : 32,
+                        size: 32,
                       ),
               ),
             ),
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildCorner({double? top, double? bottom, double? left, double? right}) {
+    return Positioned(
+      top: top,
+      bottom: bottom,
+      left: left,
+      right: right,
+      child: Container(
+        width: 24,
+        height: 24,
+        decoration: BoxDecoration(
+          border: Border(
+            top: top != null ? BorderSide(color: AppColors.primary, width: 3) : BorderSide.none,
+            bottom: bottom != null ? BorderSide(color: AppColors.primary, width: 3) : BorderSide.none,
+            left: left != null ? BorderSide(color: AppColors.primary, width: 3) : BorderSide.none,
+            right: right != null ? BorderSide(color: AppColors.primary, width: 3) : BorderSide.none,
+          ),
+        ),
+      ),
     );
   }
 }

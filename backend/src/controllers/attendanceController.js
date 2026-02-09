@@ -4,7 +4,7 @@ import Student from "../models/Student.js";
 import { matchFace } from "../services/faceApi.js";
 import Jimp from "jimp";
 
-const CONFIDENCE_THRESHOLD = 0.55;
+const CONFIDENCE_THRESHOLD = 0.50;
 
 function getToday() {
   return new Date().toISOString().slice(0, 10);
@@ -149,7 +149,8 @@ export async function scanAttendance(req, res) {
     if (err.message?.toLowerCase().includes("timeout")) {
       return res.status(408).json({ message: "Face API timeout" });
     }
-    return res.status(503).json({ message: "Service unavailable" });
+    // Return explicit waking up message if 503
+    return res.status(503).json({ message: "Face service waking up (503)" });
   }
 }
 
