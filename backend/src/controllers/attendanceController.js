@@ -388,7 +388,7 @@ export async function getAttendanceByDate(req, res) {
  */
 export async function getAttendanceByMonth(req, res) {
   try {
-    const { "yyyy-mm": yyyyMm } = req.params;
+    const { yyyymm: yyyyMm } = req.params;
     if (!/^\d{4}-\d{2}$/.test(yyyyMm)) {
       return res
         .status(400)

@@ -14,8 +14,8 @@ const router = express.Router();
 router.use(authenticate);
 
 router.get('/today', getReportToday);
-router.get('/date/:yyyy-mm-dd', getReportByDate);
-router.get('/month/:yyyy-mm', getReportByMonth);
+router.get('/date/:yyyymmdd', getReportByDate);
+router.get('/month/:yyyymm', getReportByMonth);
 router.get('/', getReport);
 router.get('/export/pdf', exportPDF);
 router.get('/export/excel', exportExcel);

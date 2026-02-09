@@ -19,7 +19,7 @@ router.use(authenticate);
 router.get('/status', getAttendanceStatus);
 router.get('/today', getAttendanceToday);
 router.get('/date/:date', getAttendanceByDate);
-router.get('/month/:yyyy-mm', getAttendanceByMonth);
+router.get('/month/:yyyymm', getAttendanceByMonth);
 router.get('/history/:studentId', getStudentAttendanceHistory);
 
 router.use(requireWarden);

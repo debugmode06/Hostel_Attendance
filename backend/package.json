@@ -16,9 +16,9 @@
     "exceljs": "^4.4.0",
     "express": "^4.21.0",
     "form-data": "^4.0.5",
+    "jimp": "^0.16.13",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.7.0",
-    "pdfkit": "^0.15.0",
-    "jimp": "^0.16.1"
+    "pdfkit": "^0.15.0"
   }
 }

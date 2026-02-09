@@ -165,44 +165,7 @@ export async function registerFace(req, res) {
   }
 }
 
-if (!result.embedding || result.embedding.length === 0) {
-  return res.status(400).json({
-    message: "Face not detected. Please try with a clear face image.",
-  });
-}
 
-// Save to database
-student.faceRegistered = true;
-student.faceEmbedding = result.embedding;
-await student.save();
-
-console.log(`[FACE] Face registered successfully for: ${regNo}`);
-return res.status(200).json({
-  success: true,
-  _id: student._id,
-  regNo: student.regNo,
-  name: student.name,
-  faceRegistered: true,
-  confidence: 0.95,
-});
-  } catch (err) {
-  console.error("[FACE] Register error:", err.message);
-
-  // Handle specific error types
-  if (err.message.includes("503")) {
-    return res.status(503).json({
-      message: "Face service waking up. Please try again in 20 seconds.",
-    });
-  }
-  if (err.message.includes("408")) {
-    return res.status(408).json({
-      message: "Face service timeout. Please try again.",
-    });
-  }
-
-  return res.status(500).json({ message: "Server error" });
-}
-}
 
 /**
  * POST /api/face/verify

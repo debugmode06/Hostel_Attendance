@@ -64,7 +64,7 @@ export async function getReportToday(req, res) {
 /** GET /reports/date/:yyyy-mm-dd */
 export async function getReportByDate(req, res) {
   try {
-    const date = req.params['yyyy-mm-dd'];
+    const date = req.params.yyyymmdd;
     if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return res.status(400).json({ message: 'Invalid date format. Use YYYY-MM-DD' });
     }
@@ -79,7 +79,7 @@ export async function getReportByDate(req, res) {
 /** GET /reports/month/:yyyy-mm */
 export async function getReportByMonth(req, res) {
   try {
-    const yyyyMm = req.params['yyyy-mm'];
+    const yyyyMm = req.params.yyyymm;
     if (!/^\d{4}-\d{2}$/.test(yyyyMm)) {
       return res.status(400).json({ message: 'Invalid month format. Use YYYY-MM' });
     }
